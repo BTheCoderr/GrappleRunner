@@ -201,6 +201,7 @@ let spawnGraceUntil = 0;
 let paused = false;
 let pauseStartedAt = 0;
 let pausedTotal = 0;
+let hiddenStartedAt = 0;
 
 const BASE_RUN_SPEED = 8.4;
 const MAX_RUN_SPEED = 11.2;
@@ -534,6 +535,7 @@ function startLevel() {
   paused = false;
   pauseStartedAt = 0;
   pausedTotal = 0;
+  hiddenStartedAt = 0;
   pauseScreen.classList.remove('visible');
   pauseButton.classList.remove('hidden');
   resetPlayer();
@@ -651,13 +653,27 @@ addEventListener('keyup', (event) => {
 });
 
 addEventListener('blur', () => {
+  // Mobile browsers can fire blur when their chrome changes focus.
+  // Never open the pause menu from blur; just safely release the rope.
   pointerHeld = false;
+  pointerId = null;
   detachGrapple();
-  if (running && !paused && !finishScreen.classList.contains('visible')) setPaused(true);
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && running && !paused) setPaused(true);
+  // Going to the background should not throw the pause overlay in the
+  // player's face when they return. rAF already stops while hidden, so we
+  // only exclude the hidden time from the run clock.
+  if (document.hidden) {
+    hiddenStartedAt = performance.now();
+    pointerHeld = false;
+    pointerId = null;
+    detachGrapple();
+  } else if (hiddenStartedAt) {
+    pausedTotal += performance.now() - hiddenStartedAt;
+    hiddenStartedAt = 0;
+    last = performance.now();
+  }
 });
 
 addEventListener('resize', () => {
