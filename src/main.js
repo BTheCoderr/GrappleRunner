@@ -10,6 +10,10 @@ const toast = document.querySelector('#toast');
 const startScreen = document.querySelector('#startScreen');
 const finishScreen = document.querySelector('#finishScreen');
 const finishTime = document.querySelector('#finishTime');
+const pauseButton = document.querySelector('#pauseButton');
+const pauseScreen = document.querySelector('#pauseScreen');
+const resumeButton = document.querySelector('#resumeButton');
+const restartButton = document.querySelector('#restartButton');
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8ed8ff);
@@ -194,13 +198,18 @@ let pointerX = 0;
 let steering = 0;
 let grounded = false;
 let spawnGraceUntil = 0;
+let paused = false;
+let pauseStartedAt = 0;
+let pausedTotal = 0;
 
 const BASE_RUN_SPEED = 8.4;
 const MAX_RUN_SPEED = 11.2;
 const GRAVITY = 19.5;
 const ROPE_REEL_SPEED = 10.0;
 const SWING_ASSIST = 2.2;
-const STEER_ACCEL = 2.2;
+const STEER_ACCEL = 0.95;
+const SOFT_LATERAL_LIMIT = 10.5;
+const HARD_LATERAL_LIMIT = 13.5;
 const AIR_DRAG = 0.9985;
 
 function setAnchorVisual(anchor, selected, attached = false) {
@@ -330,7 +339,7 @@ function updatePointerSteering() {
     return;
   }
   const span = Math.max(80, innerWidth * 0.18);
-  steering = THREE.MathUtils.clamp((pointerX - pointerStartX) / span, -1, 1);
+  steering = THREE.MathUtils.clamp((pointerX - pointerStartX) / span, -0.65, 0.65);
 }
 
 function simulateStep(dt) {
@@ -384,7 +393,20 @@ function simulateStep(dt) {
   }
 
   const previousYSpeed = vel.y;
+
+  // Keep side-to-side control useful without letting a swing launch the
+  // character completely out of the phone's view.
+  const lateralOverage = Math.abs(pos.x) - SOFT_LATERAL_LIMIT;
+  if (lateralOverage > 0) {
+    vel.x += -Math.sign(pos.x) * lateralOverage * 10 * dt;
+  }
+
   pos.addScaledVector(vel, dt);
+
+  if (Math.abs(pos.x) > HARD_LATERAL_LIMIT) {
+    pos.x = THREE.MathUtils.clamp(pos.x, -HARD_LATERAL_LIMIT, HARD_LATERAL_LIMIT);
+    if (Math.sign(vel.x) === Math.sign(pos.x)) vel.x *= 0.18;
+  }
 
   if (grappling && currentAnchor) {
     const radial = pos.clone().sub(currentAnchor.position);
@@ -424,7 +446,7 @@ function simulateStep(dt) {
 }
 
 function updatePhysics(dt, now) {
-  if (!running || respawning) return;
+  if (!running || respawning || paused) return;
 
   updatePointerSteering();
 
@@ -472,9 +494,11 @@ function updatePhysics(dt, now) {
   player.rotation.z = THREE.MathUtils.lerp(player.rotation.z, -vel.x * 0.028, 0.1);
   player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, vel.y * 0.012, 0.1);
 
-  const cameraTarget = new THREE.Vector3(pos.x * 0.34, pos.y + 5.6, pos.z - 15.5);
+  // Follow lateral movement closely so the player stays near the center of
+  // the screen instead of disappearing off the left or right edge.
+  const cameraTarget = new THREE.Vector3(pos.x * 0.88, pos.y + 5.6, pos.z - 15.5);
   camera.position.lerp(cameraTarget, 1 - Math.pow(0.0045, dt));
-  camera.lookAt(pos.x * 0.16, pos.y + 2.1, pos.z + 13);
+  camera.lookAt(pos.x * 0.82, pos.y + 2.1, pos.z + 13);
   camera.fov = THREE.MathUtils.lerp(camera.fov, 62 + Math.max(0, vel.length() - 10) * 0.2, 0.045);
   camera.updateProjectionMatrix();
 
@@ -488,7 +512,7 @@ function updatePhysics(dt, now) {
     }
     running = false;
     detachGrapple();
-    const time = (performance.now() - startT) / 1000;
+    const time = (performance.now() - startT - pausedTotal) / 1000;
     const key = `grapple-best-${level}`;
     const previousBest = Number(localStorage.getItem(key) || 999);
     if (time < previousBest) localStorage.setItem(key, time);
@@ -507,6 +531,11 @@ function startLevel() {
   grappleCount = 0;
   pointerHeld = false;
   steering = 0;
+  paused = false;
+  pauseStartedAt = 0;
+  pausedTotal = 0;
+  pauseScreen.classList.remove('visible');
+  pauseButton.classList.remove('hidden');
   resetPlayer();
 
   levelLabel.textContent = `${level}/10`;
@@ -528,6 +557,46 @@ function startLevel() {
     if (!respawning) toast.textContent = '';
   }, 1250);
 }
+
+function setPaused(nextPaused) {
+  if (!running || respawning || paused === nextPaused) return;
+  paused = nextPaused;
+  pointerHeld = false;
+  pointerId = null;
+  detachGrapple();
+
+  if (paused) {
+    pauseStartedAt = performance.now();
+    pauseScreen.classList.add('visible');
+    pauseButton.classList.add('hidden');
+  } else {
+    if (pauseStartedAt) pausedTotal += performance.now() - pauseStartedAt;
+    pauseStartedAt = 0;
+    pauseScreen.classList.remove('visible');
+    pauseButton.classList.remove('hidden');
+    last = performance.now();
+  }
+}
+
+pauseButton.onclick = (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  setPaused(true);
+};
+
+resumeButton.onclick = (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  setPaused(false);
+};
+
+restartButton.onclick = (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  paused = false;
+  pauseScreen.classList.remove('visible');
+  startLevel();
+};
 
 document.querySelector('#startButton').onclick = startLevel;
 document.querySelector('#nextButton').onclick = () => {
@@ -584,6 +653,11 @@ addEventListener('keyup', (event) => {
 addEventListener('blur', () => {
   pointerHeld = false;
   detachGrapple();
+  if (running && !paused && !finishScreen.classList.contains('visible')) setPaused(true);
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && running && !paused) setPaused(true);
 });
 
 addEventListener('resize', () => {
