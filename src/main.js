@@ -194,10 +194,13 @@ let steering = 0;
 let grounded = false;
 let spawnGraceUntil = 0;
 
-const BASE_RUN_SPEED = 7.25;
-const MAX_RUN_SPEED = 10.0;
-const GRAVITY = 21.5;
-const ROPE_REEL_SPEED = 2.8;
+const BASE_RUN_SPEED = 8.0;
+const MAX_RUN_SPEED = 11.5;
+const GRAVITY = 18.5;
+const ROPE_REEL_SPEED = 0.65;
+const SWING_ASSIST = 3.0;
+const STEER_ACCEL = 3.5;
+const AIR_DRAG = 0.997;
 
 function setAnchorVisual(anchor, selected, attached = false) {
   if (!anchor) return;
@@ -250,9 +253,10 @@ function attachGrapple() {
   currentAnchor = anchor;
   grappling = true;
   grappleCount += 1;
-  ropeLength = THREE.MathUtils.clamp(pos.distanceTo(anchor.position) * 0.96, 7.5, 27);
+  // Start with the rope at the character's real distance so attaching never snaps the player.
+  ropeLength = THREE.MathUtils.clamp(pos.distanceTo(anchor.position), 7.5, 28);
   rope.visible = true;
-  if (grounded) vel.y = Math.max(vel.y, 1.3);
+  if (grounded) vel.y = Math.max(vel.y, 0.45);
   if (navigator.vibrate) navigator.vibrate(10);
 }
 
@@ -325,50 +329,63 @@ function updatePointerSteering() {
   steering = THREE.MathUtils.clamp((pointerX - pointerStartX) / span, -1, 1);
 }
 
-function updatePhysics(dt, now) {
-  if (!running || respawning) return;
+function simulateStep(dt) {
+  const wasGrounded = grounded;
+  grounded = false;
 
-  updatePointerSteering();
-
-  for (const mover of movers) {
-    mover.mesh.position[mover.axis] =
-      mover.base[mover.axis] + Math.sin(now * 0.001 * mover.speed + mover.phase) * mover.range;
+  // Running assist only exists while your feet are on a roof. In the air,
+  // momentum belongs to the player instead of the game secretly pushing forward.
+  if (wasGrounded) {
+    vel.z = THREE.MathUtils.lerp(vel.z, MAX_RUN_SPEED, 1 - Math.pow(0.018, dt));
+    vel.x *= Math.pow(0.72, dt);
+  } else {
+    vel.x *= Math.pow(AIR_DRAG, dt * 60);
+    vel.z *= Math.pow(AIR_DRAG, dt * 60);
   }
 
-  if (now > spawnGraceUntil) {
-    for (const hazard of hazards) {
-      if (hitHazard(hazard)) {
-        respawn('CRASH!');
-        return;
-      }
+  vel.y -= GRAVITY * dt;
+
+  if (grappling && currentAnchor) {
+    ropeLength = Math.max(7.0, ropeLength - ROPE_REEL_SPEED * dt);
+
+    const radial = pos.clone().sub(currentAnchor.position);
+    const radialLength = Math.max(radial.length(), 0.001);
+    const n = radial.multiplyScalar(1 / radialLength);
+
+    // Tiny game-feel assist, but only along the rope tangent. It cannot pull
+    // the player straight through the course.
+    const forwardTangent = new THREE.Vector3(0, 0, 1).addScaledVector(n, -n.z);
+    if (forwardTangent.lengthSq() > 0.01) {
+      forwardTangent.normalize();
+      vel.addScaledVector(forwardTangent, SWING_ASSIST * dt);
+    }
+
+    // Drag steering is also projected onto the swing plane so it bends the arc
+    // instead of teleporting the player sideways.
+    const sideTangent = new THREE.Vector3(1, 0, 0).addScaledVector(n, -n.x);
+    if (sideTangent.lengthSq() > 0.01) {
+      sideTangent.normalize();
+      vel.addScaledVector(sideTangent, steering * STEER_ACCEL * dt);
     }
   }
 
   const previousYSpeed = vel.y;
-  grounded = false;
-
-  if (vel.z < MAX_RUN_SPEED) vel.z = Math.min(MAX_RUN_SPEED, vel.z + 2.4 * dt);
-  vel.y -= GRAVITY * dt;
-
-  if (grappling && currentAnchor) {
-    ropeLength = Math.max(6.5, ropeLength - ROPE_REEL_SPEED * dt);
-    vel.x += steering * 8.0 * dt;
-  } else {
-    vel.x *= Math.pow(0.985, dt * 60);
-    vel.z *= Math.pow(0.998, dt * 60);
-  }
-
   pos.addScaledVector(vel, dt);
 
   if (grappling && currentAnchor) {
     const radial = pos.clone().sub(currentAnchor.position);
     const distance = radial.length();
+
     if (distance > ropeLength) {
       const n = radial.multiplyScalar(1 / distance);
       pos.copy(currentAnchor.position).addScaledVector(n, ropeLength);
+
+      // Remove only the velocity that tries to stretch the rope. Tangential
+      // velocity survives, which is what creates the pendulum arc.
       const outwardSpeed = vel.dot(n);
       if (outwardSpeed > 0) vel.addScaledVector(n, -outwardSpeed);
     }
+
     if (currentAnchor.position.z < pos.z - 7) detachGrapple();
   }
 
@@ -379,12 +396,12 @@ function updatePhysics(dt, now) {
     vel.y = 0;
     grounded = true;
 
-    if (impactSpeed > 11) {
-      vel.z *= 0.78;
+    if (impactSpeed > 12.5) {
+      vel.z *= 0.88;
       toast.textContent = 'HEAVY LANDING';
       setTimeout(() => {
         if (toast.textContent === 'HEAVY LANDING') toast.textContent = '';
-      }, 300);
+      }, 260);
     }
 
     for (const cp of checkpoints) {
@@ -393,9 +410,38 @@ function updatePhysics(dt, now) {
         lastCheckpointZ = cp.z;
       }
     }
-  } else if (pos.y < -13 || Math.abs(pos.x) > 25) {
-    respawn('MISSED!');
-    return;
+  }
+}
+
+function updatePhysics(dt, now) {
+  if (!running || respawning) return;
+
+  updatePointerSteering();
+
+  for (const mover of movers) {
+    mover.mesh.position[mover.axis] =
+      mover.base[mover.axis] + Math.sin(now * 0.001 * mover.speed + mover.phase) * mover.range;
+  }
+
+  // Three small physics steps make the rope constraint much less jittery on phones.
+  const steps = 3;
+  const stepDt = dt / steps;
+  for (let i = 0; i < steps; i++) {
+    simulateStep(stepDt);
+
+    if (pos.y < -13 || Math.abs(pos.x) > 25) {
+      respawn('MISSED!');
+      return;
+    }
+
+    if (now > spawnGraceUntil) {
+      for (const hazard of hazards) {
+        if (hitHazard(hazard)) {
+          respawn('CRASH!');
+          return;
+        }
+      }
+    }
   }
 
   updateTargetVisual();
@@ -408,18 +454,18 @@ function updatePhysics(dt, now) {
   }
 
   hint.textContent = grappling
-    ? 'DRAG TO STEER · RELEASE TO FLY'
+    ? 'HOLD THE ARC · RELEASE TO FLY'
     : targetAnchor
       ? 'HOLD TO GRAPPLE'
       : 'NEXT HOOK AHEAD';
 
-  player.rotation.z = THREE.MathUtils.lerp(player.rotation.z, -vel.x * 0.035, 0.12);
-  player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, vel.y * 0.015, 0.12);
+  player.rotation.z = THREE.MathUtils.lerp(player.rotation.z, -vel.x * 0.028, 0.1);
+  player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, vel.y * 0.012, 0.1);
 
-  const cameraTarget = new THREE.Vector3(pos.x * 0.55, pos.y + 5.4, pos.z - 13.5);
-  camera.position.lerp(cameraTarget, 1 - Math.pow(0.002, dt));
-  camera.lookAt(pos.x * 0.28, pos.y + 2.1, pos.z + 11);
-  camera.fov = THREE.MathUtils.lerp(camera.fov, 64 + Math.max(0, vel.length() - 10) * 0.45, 0.07);
+  const cameraTarget = new THREE.Vector3(pos.x * 0.48, pos.y + 5.2, pos.z - 14.5);
+  camera.position.lerp(cameraTarget, 1 - Math.pow(0.003, dt));
+  camera.lookAt(pos.x * 0.22, pos.y + 2.0, pos.z + 12);
+  camera.fov = THREE.MathUtils.lerp(camera.fov, 63 + Math.max(0, vel.length() - 10) * 0.34, 0.055);
   camera.updateProjectionMatrix();
 
   speedLabel.textContent = Math.round(vel.length());
