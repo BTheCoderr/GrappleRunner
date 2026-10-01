@@ -108,18 +108,18 @@ function buildLevel(level) {
   if (level === 1) {
     const platforms = [
       { x: 0, y: 0, z: 0, w: 18, d: 18 },
-      { x: 0, y: 0, z: 36, w: 17, d: 15 },
-      { x: 5, y: 1.2, z: 72, w: 16, d: 15 },
-      { x: -4, y: 2.0, z: 109, w: 18, d: 16 }
+      { x: 0, y: 0, z: 34, w: 18, d: 16 },
+      { x: 4, y: 1.0, z: 68, w: 17, d: 16 },
+      { x: -3, y: 1.7, z: 102, w: 19, d: 17 }
     ];
     platforms.forEach((p) => {
       addRoof(p.x, p.y, p.z, p.w, p.d);
       addCheckpoint(p.x, p.y, p.z);
     });
-    addAnchor(0, 12, 19);
-    addAnchor(7, 14, 55);
-    addAnchor(-7, 15.5, 91);
-    return addFinish(-4, 2.0, 116);
+    addAnchor(0, 9.5, 18);
+    addAnchor(6, 10.8, 52);
+    addAnchor(-6, 12.0, 86);
+    return addFinish(-3, 1.7, 109);
   }
 
   const count = 7 + Math.min(4, Math.floor(level / 2));
@@ -181,6 +181,7 @@ let respawning = false;
 let grappling = false;
 let currentAnchor = null;
 let ropeLength = 0;
+let ropeTargetLength = 0;
 let level = 1;
 let finishZ = 0;
 let startT = 0;
@@ -194,13 +195,13 @@ let steering = 0;
 let grounded = false;
 let spawnGraceUntil = 0;
 
-const BASE_RUN_SPEED = 8.0;
-const MAX_RUN_SPEED = 11.5;
-const GRAVITY = 18.5;
-const ROPE_REEL_SPEED = 0.65;
-const SWING_ASSIST = 3.0;
-const STEER_ACCEL = 3.5;
-const AIR_DRAG = 0.997;
+const BASE_RUN_SPEED = 8.4;
+const MAX_RUN_SPEED = 11.2;
+const GRAVITY = 19.5;
+const ROPE_REEL_SPEED = 10.0;
+const SWING_ASSIST = 2.2;
+const STEER_ACCEL = 2.2;
+const AIR_DRAG = 0.9985;
 
 function setAnchorVisual(anchor, selected, attached = false) {
   if (!anchor) return;
@@ -253,10 +254,13 @@ function attachGrapple() {
   currentAnchor = anchor;
   grappling = true;
   grappleCount += 1;
-  // Start with the rope at the character's real distance so attaching never snaps the player.
-  ropeLength = THREE.MathUtils.clamp(pos.distanceTo(anchor.position), 7.5, 28);
+  // Attach at the real distance, then smoothly tighten toward a shorter
+  // working radius. This makes the rope catch early without teleporting.
+  const attachDistance = pos.distanceTo(anchor.position);
+  ropeLength = THREE.MathUtils.clamp(attachDistance, 7.5, 28);
+  ropeTargetLength = THREE.MathUtils.clamp(attachDistance * 0.78, 7.25, 20.5);
   rope.visible = true;
-  if (grounded) vel.y = Math.max(vel.y, 0.45);
+  if (grounded) vel.y = Math.max(vel.y, 0.2);
   if (navigator.vibrate) navigator.vibrate(10);
 }
 
@@ -346,22 +350,32 @@ function simulateStep(dt) {
   vel.y -= GRAVITY * dt;
 
   if (grappling && currentAnchor) {
-    ropeLength = Math.max(7.0, ropeLength - ROPE_REEL_SPEED * dt);
+    ropeLength = Math.max(
+      ropeTargetLength,
+      ropeLength - ROPE_REEL_SPEED * dt
+    );
 
     const radial = pos.clone().sub(currentAnchor.position);
     const radialLength = Math.max(radial.length(), 0.001);
     const n = radial.multiplyScalar(1 / radialLength);
 
-    // Tiny game-feel assist, but only along the rope tangent. It cannot pull
-    // the player straight through the course.
+    // Apply tension before the hard constraint so the rope curves the path
+    // progressively instead of suddenly catching after the player passes it.
+    const stretch = Math.max(0, radialLength - ropeLength);
+    if (stretch > 0) {
+      const inward = n.clone().multiplyScalar(-1);
+      const outwardSpeed = Math.max(0, vel.dot(n));
+      vel.addScaledVector(inward, (stretch * 13 + outwardSpeed * 4.5) * dt);
+    }
+
+    // Very small tangent assist keeps the arcade flow alive without turning
+    // the rope into a forward tractor beam.
     const forwardTangent = new THREE.Vector3(0, 0, 1).addScaledVector(n, -n.z);
     if (forwardTangent.lengthSq() > 0.01) {
       forwardTangent.normalize();
       vel.addScaledVector(forwardTangent, SWING_ASSIST * dt);
     }
 
-    // Drag steering is also projected onto the swing plane so it bends the arc
-    // instead of teleporting the player sideways.
     const sideTangent = new THREE.Vector3(1, 0, 0).addScaledVector(n, -n.x);
     if (sideTangent.lengthSq() > 0.01) {
       sideTangent.normalize();
@@ -396,12 +410,8 @@ function simulateStep(dt) {
     vel.y = 0;
     grounded = true;
 
-    if (impactSpeed > 12.5) {
-      vel.z *= 0.88;
-      toast.textContent = 'HEAVY LANDING';
-      setTimeout(() => {
-        if (toast.textContent === 'HEAVY LANDING') toast.textContent = '';
-      }, 260);
+    if (impactSpeed > 14.5) {
+      vel.z *= 0.92;
     }
 
     for (const cp of checkpoints) {
@@ -454,7 +464,7 @@ function updatePhysics(dt, now) {
   }
 
   hint.textContent = grappling
-    ? 'HOLD THE ARC · RELEASE TO FLY'
+    ? 'SWINGING · RELEASE WHEN YOU RISE'
     : targetAnchor
       ? 'HOLD TO GRAPPLE'
       : 'NEXT HOOK AHEAD';
@@ -462,10 +472,10 @@ function updatePhysics(dt, now) {
   player.rotation.z = THREE.MathUtils.lerp(player.rotation.z, -vel.x * 0.028, 0.1);
   player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, vel.y * 0.012, 0.1);
 
-  const cameraTarget = new THREE.Vector3(pos.x * 0.48, pos.y + 5.2, pos.z - 14.5);
-  camera.position.lerp(cameraTarget, 1 - Math.pow(0.003, dt));
-  camera.lookAt(pos.x * 0.22, pos.y + 2.0, pos.z + 12);
-  camera.fov = THREE.MathUtils.lerp(camera.fov, 63 + Math.max(0, vel.length() - 10) * 0.34, 0.055);
+  const cameraTarget = new THREE.Vector3(pos.x * 0.34, pos.y + 5.6, pos.z - 15.5);
+  camera.position.lerp(cameraTarget, 1 - Math.pow(0.0045, dt));
+  camera.lookAt(pos.x * 0.16, pos.y + 2.1, pos.z + 13);
+  camera.fov = THREE.MathUtils.lerp(camera.fov, 62 + Math.max(0, vel.length() - 10) * 0.2, 0.045);
   camera.updateProjectionMatrix();
 
   speedLabel.textContent = Math.round(vel.length());
