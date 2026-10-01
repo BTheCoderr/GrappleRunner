@@ -199,6 +199,8 @@ let steering = 0;
 let grounded = false;
 let releaseCueShown = false;
 let releaseReady = false;
+let flowStreak = 0;
+let feelPulse = 0;
 let spawnGraceUntil = 0;
 let paused = false;
 let pauseStartedAt = 0;
@@ -217,9 +219,10 @@ const AIR_DRAG = 0.9985;
 
 function setAnchorVisual(anchor, selected, attached = false) {
   if (!anchor) return;
-  const s = attached ? 1.42 : selected ? 1.24 : 1;
+  const s = attached ? (releaseReady ? 1.55 : 1.42) : selected ? 1.24 : 1;
   anchor.scale.lerp(new THREE.Vector3(s, s, s), 0.25);
-  anchor.material.emissiveIntensity = attached ? 5.0 : selected ? 3.7 : 2.4;
+  anchor.material.emissiveIntensity = attached ? (releaseReady ? 6.5 : 5.0) : selected ? 3.7 : 2.4;
+  anchor.material.emissive.setHex(attached && releaseReady ? 0x35ff85 : 0xffb800);
 }
 
 function chooseTarget() {
@@ -278,26 +281,42 @@ function attachGrapple() {
   if (navigator.vibrate) navigator.vibrate(10);
 }
 
-function detachGrapple() {
+function detachGrapple(playerRelease = false) {
   if (!grappling) return;
-  const wasReady = releaseReady;
+
+  const earnedPerfect = playerRelease && releaseReady;
   grappling = false;
   rope.visible = false;
+  rope.material.color.setHex(0xffffff);
+  if (currentAnchor) {
+    currentAnchor.material.emissive.setHex(0xffb800);
+    currentAnchor.material.emissiveIntensity = 2.4;
+  }
   currentAnchor = null;
   releaseReady = false;
   releaseCueShown = false;
 
-  if (wasReady) {
-    toast.textContent = 'PERFECT!';
-    if (navigator.vibrate) navigator.vibrate(10);
+  if (earnedPerfect) {
+    flowStreak += 1;
+    feelPulse = 1;
+
+    // Tiny reward, not a fake launch: preserve the real trajectory and
+    // sweeten it just enough that good timing feels noticeably better.
+    vel.multiplyScalar(1.035);
+    vel.y += 0.35;
+
+    toast.textContent = flowStreak > 1 ? `PERFECT ×${flowStreak}` : 'PERFECT RELEASE';
+    if (navigator.vibrate) navigator.vibrate([7, 18, 10]);
     setTimeout(() => {
-      if (toast.textContent === 'PERFECT!') toast.textContent = '';
-    }, 320);
+      if (toast.textContent.startsWith('PERFECT')) toast.textContent = '';
+    }, 380);
+  } else if (playerRelease) {
+    flowStreak = 0;
   }
 }
 
 function resetPlayer() {
-  detachGrapple();
+  detachGrapple(false);
   pos.copy(checkpoint);
   vel.set(0, 0, BASE_RUN_SPEED);
   respawning = false;
@@ -331,7 +350,8 @@ function hitHazard(hazard) {
 function respawn(message) {
   if (respawning) return;
   respawning = true;
-  detachGrapple();
+  flowStreak = 0;
+  detachGrapple(false);
   toast.textContent = message;
   if (navigator.vibrate) navigator.vibrate([20, 25, 35]);
   setTimeout(() => {
@@ -428,7 +448,7 @@ function simulateStep(dt) {
       if (outwardSpeed > 0) vel.addScaledVector(n, -outwardSpeed);
     }
 
-    if (currentAnchor.position.z < pos.z - 7) detachGrapple();
+    if (currentAnchor.position.z < pos.z - 7) detachGrapple(false);
   }
 
   const ground = groundAt();
@@ -438,8 +458,16 @@ function simulateStep(dt) {
     vel.y = 0;
     grounded = true;
 
-    if (impactSpeed > 14.5) {
+    if (!wasGrounded && impactSpeed > 2.5 && impactSpeed < 8.5 && vel.z > 8) {
+      if (!toast.textContent) {
+        toast.textContent = flowStreak > 0 ? `SMOOTH · FLOW ×${flowStreak}` : 'SMOOTH LANDING';
+        setTimeout(() => {
+          if (toast.textContent.startsWith('SMOOTH')) toast.textContent = '';
+        }, 300);
+      }
+    } else if (impactSpeed > 14.5) {
       vel.z *= 0.92;
+      flowStreak = 0;
     }
 
     for (const cp of checkpoints) {
@@ -485,8 +513,14 @@ function updatePhysics(dt, now) {
   updateTargetVisual();
 
   if (grappling && currentAnchor) {
-    const passedBottom = pos.z > currentAnchor.position.z - 1.5;
-    releaseReady = passedBottom && vel.y > 1.1 && vel.z > 7.5;
+    const relativeZ = pos.z - currentAnchor.position.z;
+    const passedBottom = relativeZ > -1.2;
+    const risingCleanly = vel.y > 0.9 && vel.y < 7.5;
+    const forwardEnough = vel.z > 7.0;
+    releaseReady = passedBottom && relativeZ < 6.0 && risingCleanly && forwardEnough;
+
+    rope.material.color.setHex(releaseReady ? 0xa7ffbf : 0xffffff);
+
     if (releaseReady && !releaseCueShown) {
       releaseCueShown = true;
       if (navigator.vibrate) navigator.vibrate(6);
@@ -516,7 +550,13 @@ function updatePhysics(dt, now) {
   const cameraTarget = new THREE.Vector3(pos.x * 0.88, pos.y + 5.6, pos.z - 15.5);
   camera.position.lerp(cameraTarget, 1 - Math.pow(0.0045, dt));
   camera.lookAt(pos.x * 0.82, pos.y + 2.1, pos.z + 13);
-  camera.fov = THREE.MathUtils.lerp(camera.fov, 62 + Math.max(0, vel.length() - 10) * 0.2, 0.045);
+  feelPulse = Math.max(0, feelPulse - dt * 3.8);
+  const pulseFov = feelPulse * 2.2;
+  camera.fov = THREE.MathUtils.lerp(
+    camera.fov,
+    62 + Math.max(0, vel.length() - 10) * 0.2 + pulseFov,
+    0.055
+  );
   camera.updateProjectionMatrix();
 
   speedLabel.textContent = Math.round(vel.length());
@@ -528,7 +568,7 @@ function updatePhysics(dt, now) {
       return;
     }
     running = false;
-    detachGrapple();
+    detachGrapple(false);
     const time = (performance.now() - startT - pausedTotal) / 1000;
     const key = `grapple-best-${level}`;
     const previousBest = Number(localStorage.getItem(key) || 999);
@@ -550,6 +590,8 @@ function startLevel() {
   steering = 0;
   releaseCueShown = false;
   releaseReady = false;
+  flowStreak = 0;
+  feelPulse = 0;
   paused = false;
   pauseStartedAt = 0;
   pausedTotal = 0;
@@ -583,7 +625,7 @@ function setPaused(nextPaused) {
   paused = nextPaused;
   pointerHeld = false;
   pointerId = null;
-  detachGrapple();
+  detachGrapple(false);
 
   if (paused) {
     pauseStartedAt = performance.now();
@@ -644,7 +686,7 @@ function endPointer(event) {
   event?.preventDefault?.();
   pointerHeld = false;
   pointerId = null;
-  detachGrapple();
+  detachGrapple(true);
 }
 
 renderer.domElement.addEventListener('pointerup', endPointer, { passive: false });
@@ -665,7 +707,7 @@ addEventListener('keyup', (event) => {
   if (event.code === 'Space') {
     event.preventDefault();
     pointerHeld = false;
-    detachGrapple();
+    detachGrapple(true);
   }
 });
 
@@ -674,7 +716,7 @@ addEventListener('blur', () => {
   // Never open the pause menu from blur; just safely release the rope.
   pointerHeld = false;
   pointerId = null;
-  detachGrapple();
+  detachGrapple(false);
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -685,7 +727,7 @@ document.addEventListener('visibilitychange', () => {
     hiddenStartedAt = performance.now();
     pointerHeld = false;
     pointerId = null;
-    detachGrapple();
+    detachGrapple(false);
   } else if (hiddenStartedAt) {
     pausedTotal += performance.now() - hiddenStartedAt;
     hiddenStartedAt = 0;
