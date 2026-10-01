@@ -199,6 +199,8 @@ let steering = 0;
 let grounded = false;
 let releaseCueShown = false;
 let releaseReady = false;
+let lastReleaseWindowAt = 0;
+let grappleBuffered = false;
 let flowStreak = 0;
 let feelPulse = 0;
 let spawnGraceUntil = 0;
@@ -260,12 +262,12 @@ function attachGrapple() {
   if (!running || respawning || grappling) return;
   const anchor = chooseTarget();
   if (!anchor) {
-    toast.textContent = 'NO HOOK IN RANGE';
-    setTimeout(() => {
-      if (!respawning && toast.textContent === 'NO HOOK IN RANGE') toast.textContent = '';
-    }, 350);
+    // If the player presses a fraction too early, keep the press alive and
+    // grab the hook the moment it enters range. This removes dead taps.
+    grappleBuffered = pointerHeld;
     return;
   }
+  grappleBuffered = false;
   currentAnchor = anchor;
   grappling = true;
   grappleCount += 1;
@@ -284,7 +286,8 @@ function attachGrapple() {
 function detachGrapple(playerRelease = false) {
   if (!grappling) return;
 
-  const earnedPerfect = playerRelease && releaseReady;
+  const releaseGrace = performance.now() - lastReleaseWindowAt < 140;
+  const earnedPerfect = playerRelease && (releaseReady || releaseGrace);
   grappling = false;
   rope.visible = false;
   rope.material.color.setHex(0xffffff);
@@ -295,6 +298,7 @@ function detachGrapple(playerRelease = false) {
   currentAnchor = null;
   releaseReady = false;
   releaseCueShown = false;
+  lastReleaseWindowAt = 0;
 
   if (earnedPerfect) {
     flowStreak += 1;
@@ -319,6 +323,7 @@ function resetPlayer() {
   detachGrapple(false);
   pos.copy(checkpoint);
   vel.set(0, 0, BASE_RUN_SPEED);
+  grappleBuffered = false;
   respawning = false;
   grounded = true;
   spawnGraceUntil = performance.now() + 850;
@@ -427,6 +432,21 @@ function simulateStep(dt) {
     vel.x += -Math.sign(pos.x) * lateralOverage * 10 * dt;
   }
 
+  // Near a landing, add a tiny invisible assist toward the platform center.
+  // It only works while descending and is intentionally too weak to save a
+  // truly bad release.
+  if (!grappling && vel.y < -0.5) {
+    const landingRoof = roofs.find((roof) =>
+      roof.z > pos.z - 2 &&
+      roof.z < pos.z + 18 &&
+      pos.y > roof.y
+    );
+    if (landingRoof) {
+      const landingError = landingRoof.x - pos.x;
+      vel.x += THREE.MathUtils.clamp(landingError * 0.22 - vel.x * 0.08, -0.7, 0.7) * dt;
+    }
+  }
+
   pos.addScaledVector(vel, dt);
 
   if (Math.abs(pos.x) > HARD_LATERAL_LIMIT) {
@@ -512,12 +532,18 @@ function updatePhysics(dt, now) {
 
   updateTargetVisual();
 
+  // Honor an early hold as soon as the hook becomes reachable.
+  if (grappleBuffered && pointerHeld && !grappling && targetAnchor) {
+    attachGrapple();
+  }
+
   if (grappling && currentAnchor) {
     const relativeZ = pos.z - currentAnchor.position.z;
     const passedBottom = relativeZ > -1.2;
     const risingCleanly = vel.y > 0.9 && vel.y < 7.5;
     const forwardEnough = vel.z > 7.0;
-    releaseReady = passedBottom && relativeZ < 6.0 && risingCleanly && forwardEnough;
+    releaseReady = passedBottom && relativeZ < 6.8 && risingCleanly && forwardEnough;
+    if (releaseReady) lastReleaseWindowAt = performance.now();
 
     rope.material.color.setHex(releaseReady ? 0xa7ffbf : 0xffffff);
 
@@ -590,6 +616,8 @@ function startLevel() {
   steering = 0;
   releaseCueShown = false;
   releaseReady = false;
+  lastReleaseWindowAt = 0;
+  grappleBuffered = false;
   flowStreak = 0;
   feelPulse = 0;
   paused = false;
@@ -624,6 +652,7 @@ function setPaused(nextPaused) {
   if (!running || respawning || paused === nextPaused) return;
   paused = nextPaused;
   pointerHeld = false;
+  grappleBuffered = false;
   pointerId = null;
   detachGrapple(false);
 
@@ -669,6 +698,7 @@ document.querySelector('#nextButton').onclick = () => {
 renderer.domElement.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   pointerHeld = true;
+  grappleBuffered = true;
   pointerId = event.pointerId;
   pointerStartX = event.clientX;
   pointerX = event.clientX;
@@ -685,6 +715,7 @@ function endPointer(event) {
   if (pointerId !== null && event?.pointerId !== undefined && event.pointerId !== pointerId) return;
   event?.preventDefault?.();
   pointerHeld = false;
+  grappleBuffered = false;
   pointerId = null;
   detachGrapple(true);
 }
@@ -697,6 +728,7 @@ addEventListener('keydown', (event) => {
   if (event.code === 'Space' && !event.repeat) {
     event.preventDefault();
     pointerHeld = true;
+    grappleBuffered = true;
     pointerStartX = innerWidth / 2;
     pointerX = pointerStartX;
     attachGrapple();
@@ -707,6 +739,7 @@ addEventListener('keyup', (event) => {
   if (event.code === 'Space') {
     event.preventDefault();
     pointerHeld = false;
+    grappleBuffered = false;
     detachGrapple(true);
   }
 });
@@ -726,6 +759,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenStartedAt = performance.now();
     pointerHeld = false;
+    grappleBuffered = false;
     pointerId = null;
     detachGrapple(false);
   } else if (hiddenStartedAt) {
