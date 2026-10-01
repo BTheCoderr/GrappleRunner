@@ -113,17 +113,17 @@ function buildLevel(level) {
     const platforms = [
       { x: 0, y: 0, z: 0, w: 18, d: 18 },
       { x: 0, y: 0, z: 34, w: 18, d: 16 },
-      { x: 4, y: 1.0, z: 68, w: 17, d: 16 },
-      { x: -3, y: 1.7, z: 102, w: 19, d: 17 }
+      { x: 2, y: 1.0, z: 68, w: 18, d: 16 },
+      { x: -2, y: 1.7, z: 102, w: 19, d: 17 }
     ];
     platforms.forEach((p) => {
       addRoof(p.x, p.y, p.z, p.w, p.d);
       addCheckpoint(p.x, p.y, p.z);
     });
     addAnchor(0, 9.5, 18);
-    addAnchor(6, 10.8, 52);
-    addAnchor(-6, 12.0, 86);
-    return addFinish(-3, 1.7, 109);
+    addAnchor(3.5, 10.8, 52);
+    addAnchor(-3.5, 12.0, 86);
+    return addFinish(-2, 1.7, 109);
   }
 
   const count = 7 + Math.min(4, Math.floor(level / 2));
@@ -197,6 +197,8 @@ let pointerStartX = 0;
 let pointerX = 0;
 let steering = 0;
 let grounded = false;
+let releaseCueShown = false;
+let releaseReady = false;
 let spawnGraceUntil = 0;
 let paused = false;
 let pauseStartedAt = 0;
@@ -208,9 +210,9 @@ const MAX_RUN_SPEED = 11.2;
 const GRAVITY = 19.5;
 const ROPE_REEL_SPEED = 10.0;
 const SWING_ASSIST = 2.2;
-const STEER_ACCEL = 0.95;
-const SOFT_LATERAL_LIMIT = 10.5;
-const HARD_LATERAL_LIMIT = 13.5;
+const STEER_ACCEL = 0;
+const SOFT_LATERAL_LIMIT = 7.5;
+const HARD_LATERAL_LIMIT = 9.5;
 const AIR_DRAG = 0.9985;
 
 function setAnchorVisual(anchor, selected, attached = false) {
@@ -229,7 +231,7 @@ function chooseTarget() {
     if (dz < 4 || dz > 40) continue;
     const distance = offset.length();
     if (distance > 43) continue;
-    const lateralBias = Math.abs(offset.x - steering * 7);
+    const lateralBias = Math.abs(offset.x);
     const verticalPenalty = Math.max(0, offset.y - 18) * 0.2;
     const score = distance + lateralBias * 0.55 + verticalPenalty;
     if (score < bestScore) {
@@ -264,6 +266,8 @@ function attachGrapple() {
   currentAnchor = anchor;
   grappling = true;
   grappleCount += 1;
+  releaseCueShown = false;
+  releaseReady = false;
   // Attach at the real distance, then smoothly tighten toward a shorter
   // working radius. This makes the rope catch early without teleporting.
   const attachDistance = pos.distanceTo(anchor.position);
@@ -276,17 +280,19 @@ function attachGrapple() {
 
 function detachGrapple() {
   if (!grappling) return;
+  const wasReady = releaseReady;
   grappling = false;
   rope.visible = false;
   currentAnchor = null;
+  releaseReady = false;
+  releaseCueShown = false;
 
-  const speed = vel.length();
-  if (speed > 12.5 && vel.y > -1.5) {
-    toast.textContent = 'CLEAN RELEASE';
-    if (navigator.vibrate) navigator.vibrate(8);
+  if (wasReady) {
+    toast.textContent = 'PERFECT!';
+    if (navigator.vibrate) navigator.vibrate(10);
     setTimeout(() => {
-      if (toast.textContent === 'CLEAN RELEASE') toast.textContent = '';
-    }, 300);
+      if (toast.textContent === 'PERFECT!') toast.textContent = '';
+    }, 320);
   }
 }
 
@@ -335,12 +341,9 @@ function respawn(message) {
 }
 
 function updatePointerSteering() {
-  if (!pointerHeld) {
-    steering = THREE.MathUtils.lerp(steering, 0, 0.12);
-    return;
-  }
-  const span = Math.max(80, innerWidth * 0.18);
-  steering = THREE.MathUtils.clamp((pointerX - pointerStartX) / span, -0.65, 0.65);
+  // One-touch controller: the player only decides when to attach/release.
+  // Course geometry and rope physics shape the line; no free lateral drag.
+  steering = 0;
 }
 
 function simulateStep(dt) {
@@ -386,10 +389,12 @@ function simulateStep(dt) {
       vel.addScaledVector(forwardTangent, SWING_ASSIST * dt);
     }
 
-    const sideTangent = new THREE.Vector3(1, 0, 0).addScaledVector(n, -n.x);
-    if (sideTangent.lengthSq() > 0.01) {
-      sideTangent.normalize();
-      vel.addScaledVector(sideTangent, steering * STEER_ACCEL * dt);
+    // Keep the swing readable on a phone: gently guide lateral velocity
+    // toward the next landing platform instead of allowing free side drift.
+    const nextRoof = roofs.find((roof) => roof.z > pos.z + 6);
+    if (nextRoof) {
+      const desiredX = nextRoof.x;
+      vel.x += THREE.MathUtils.clamp((desiredX - pos.x) * 0.55 - vel.x * 0.22, -2.2, 2.2) * dt;
     }
   }
 
@@ -479,6 +484,17 @@ function updatePhysics(dt, now) {
 
   updateTargetVisual();
 
+  if (grappling && currentAnchor) {
+    const passedBottom = pos.z > currentAnchor.position.z - 1.5;
+    releaseReady = passedBottom && vel.y > 1.1 && vel.z > 7.5;
+    if (releaseReady && !releaseCueShown) {
+      releaseCueShown = true;
+      if (navigator.vibrate) navigator.vibrate(6);
+    }
+  } else {
+    releaseReady = false;
+  }
+
   if (rope.visible && currentAnchor) {
     rope.geometry.setFromPoints([
       pos.clone().add(new THREE.Vector3(0, 0.65, 0)),
@@ -487,7 +503,7 @@ function updatePhysics(dt, now) {
   }
 
   hint.textContent = grappling
-    ? 'SWINGING · RELEASE WHEN YOU RISE'
+    ? (releaseReady ? 'RELEASE!' : 'HOLD THE SWING')
     : targetAnchor
       ? 'HOLD TO GRAPPLE'
       : 'NEXT HOOK AHEAD';
@@ -532,6 +548,8 @@ function startLevel() {
   grappleCount = 0;
   pointerHeld = false;
   steering = 0;
+  releaseCueShown = false;
+  releaseReady = false;
   paused = false;
   pauseStartedAt = 0;
   pausedTotal = 0;
@@ -619,7 +637,6 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!pointerHeld || event.pointerId !== pointerId) return;
   event.preventDefault();
-  pointerX = event.clientX;
 }, { passive: false });
 
 function endPointer(event) {
