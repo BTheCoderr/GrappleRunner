@@ -1,29 +1,19 @@
 import * as THREE from 'three';
-
-export const RUN_SPEED = 10.5;
-
-// Five authored rounds. Same front/back grapple language, increasingly demanding timing.
-export const LEVELS = [
-  {name:'ROOFTOP RHYTHM', start:-12, end:190, platforms:[[-12,22,0],[55,88,0],[116,145,2],[174,205,4]], hooks:[[15,36],[18,103],[23,160]], labels:['EASY SWING','LATE RELEASE','LONG GAP']},
-  {name:'DOUBLE DROP', start:220, end:420, platforms:[[220,250,4],[282,310,1],[344,371,5],[401,435,2]], hooks:[[20,267],[15,327],[24,387]], labels:['DROP LOW','CARRY SPEED','CLIMB OUT']},
-  {name:'HIGH LINE', start:455, end:675, platforms:[[455,484,2],[523,551,7],[594,620,3],[657,692,8]], hooks:[[24,505],[29,573],[22,640]], labels:['HIGH CATCH','SHORT LANDING','HIGH FINISH']},
-  {name:'GAP RUN', start:715, end:955, platforms:[[715,746,3],[790,815,5],[858,882,2],[932,970,6]], hooks:[[21,769],[26,838],[25,907]], labels:['LONG GAP','QUICK RELEASE','LONG GAP']},
-  {name:'FINAL FLOW', start:1000, end:1280, platforms:[[1000,1030,4],[1070,1094,7],[1135,1158,3],[1200,1222,8],[1260,1295,5]], hooks:[[24,1050],[28,1115],[23,1180],[30,1240]], labels:['CATCH','RELEASE','CARRY','FINAL SWING']}
+export const RUN_SPEED=10.5;
+export const LEVELS=[
+{name:'ROOFTOP RHYTHM',subtitle:'Learn the city line',objective:'3 clean swings',theme:'city',sky:0x8ed8ff,fog:0x8ed8ff,start:-12,end:190,platforms:[[-12,22,0],[55,88,0],[116,145,2],[174,205,4]],hooks:[[15,36],[18,103],[23,160]],labels:['EASY SWING','LATE RELEASE','LONG GAP']},
+{name:'DOUBLE DROP',subtitle:'Construction district',objective:'Use the drops to keep speed',theme:'construction',sky:0xf5b56b,fog:0xf5b56b,start:220,end:420,platforms:[[220,250,4],[282,310,1],[344,371,5],[401,435,2]],hooks:[[20,267],[15,327],[24,387]],labels:['DROP LOW','CARRY SPEED','CLIMB OUT']},
+{name:'HIGH LINE',subtitle:'Above the skyline',objective:'Catch the high hooks',theme:'highrise',sky:0x77bce8,fog:0x77bce8,start:455,end:675,platforms:[[455,484,2],[523,551,7],[594,620,3],[657,692,8]],hooks:[[24,505],[29,573],[22,640]],labels:['HIGH CATCH','SHORT LANDING','HIGH FINISH']},
+{name:'GAP RUN',subtitle:'Industrial crossing',objective:'Commit to the long gaps',theme:'industrial',sky:0x9ba7ad,fog:0x9ba7ad,start:715,end:955,platforms:[[715,746,3],[790,815,5],[858,882,2],[932,970,6]],hooks:[[21,769],[26,838],[25,907]],labels:['LONG GAP','QUICK RELEASE','LONG GAP']},
+{name:'FINAL FLOW',subtitle:'Neon night run',objective:'Chain 4 swings without fear',theme:'neon',sky:0x101a3c,fog:0x101a3c,start:1000,end:1280,platforms:[[1000,1030,4],[1070,1094,7],[1135,1158,3],[1200,1222,8],[1260,1295,5]],hooks:[[24,1050],[28,1115],[23,1180],[30,1240]],labels:['CATCH','RELEASE','CARRY','FINAL SWING']}
 ];
-
-export function groundHeight(z,levelIndex=0){const level=LEVELS[levelIndex];for(const [a,b,h] of level.platforms)if(z>=a&&z<=b)return h;return null;}
-
-export function buildLevel(scene,levelIndex=0){
-  const level=LEVELS[levelIndex],group=new THREE.Group();scene.add(group);const material=color=>new THREE.MeshStandardMaterial({color,roughness:.72});
-  const box=(x,y,z,w,h,d,color)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material(color));m.position.set(x,y,z);m.receiveShadow=m.castShadow=true;group.add(m);return m;};
-  const colors=[0x657bd1,0x54b99e,0xf09a65,0x9a7bd1,0x58a6a6];
-  level.platforms.forEach(([a,b,h],i)=>box(0,h-2,(a+b)/2,20,4,b-a,colors[i%colors.length]));
-  // Side skyline only; never intersects the player's forward plane.
-  level.platforms.forEach(([a,b,h],i)=>{const z=(a+b)/2+18;box(i%2?-24:24,h+11,z,14,26,18,0x7896a8);});
-  const makeAnchor=(y,z)=>{const a=new THREE.Mesh(new THREE.SphereGeometry(1,20,16),new THREE.MeshStandardMaterial({color:0xffdf45,emissive:0xffb400,emissiveIntensity:3}));a.position.set(0,y,z);group.add(a);return a;};
-  const anchors=level.hooks.map(([y,z])=>makeAnchor(y,z));
-  const finish=new THREE.Mesh(new THREE.TorusGeometry(4,.45,12,36),material(0xffdf45));finish.rotation.y=Math.PI/2;finish.position.set(0,(level.platforms.at(-1)?.[2]||0)+6,level.end-6);group.add(finish);
-  return {group,anchors,labels:level.labels,level};
-}
-
-export function nextAnchor(anchors,z){return anchors.find(a=>{const dz=a.position.z-z;return dz>2&&dz<38;})||null;}
+export function groundHeight(z,i=0){for(const[a,b,h]of LEVELS[i].platforms)if(z>=a&&z<=b)return h;return null;}
+export function buildLevel(scene,i=0){const l=LEVELS[i],g=new THREE.Group();scene.add(g);const m=(c,e=0)=>new THREE.MeshStandardMaterial({color:c,roughness:.72,emissive:e?c:0,emissiveIntensity:e});const box=(x,y,z,w,h,d,c,e=0)=>{const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m(c,e));o.position.set(x,y,z);o.receiveShadow=o.castShadow=true;g.add(o);return o};const palettes={city:[0x657bd1,0x54b99e,0xf09a65,0x9a7bd1],construction:[0xd9822b,0xf1c84b,0x59636d,0xc65d32],highrise:[0x4c78a8,0x7aa6c2,0xb9d6e8,0x627d98],industrial:[0x59636d,0x79868d,0xa76d42,0x48545a],neon:[0x282b68,0x3c327e,0x214b66,0x472b70]};const p=palettes[l.theme];l.platforms.forEach(([a,b,h],n)=>box(0,h-2,(a+b)/2,20,4,b-a,p[n%p.length]));
+// Distinct set dressing stays outside the gameplay plane.
+if(l.theme==='construction'){for(let z=l.start+25;z<l.end;z+=55){box(-25,10,z,2,22,2,0xe9b949);box(25,7,z+8,12,1,2,0xe9b949);}}
+if(l.theme==='highrise'){for(let z=l.start+15;z<l.end;z+=38){const h=18+(z%4)*3;box(z%76?24:-24,h/2-2,z,15,h,18,0x66869e);}}
+if(l.theme==='industrial'){for(let z=l.start+22;z<l.end;z+=62){box(-24,6,z,4,16,4,0x6a7479);box(24,11,z+10,4,26,4,0x6a7479);box(0,19,z+5,46,2,2,0x555f64);}}
+if(l.theme==='neon'){for(let z=l.start+18;z<l.end;z+=35){box(-24,10,z,12,25,12,0x18254b);box(24,14,z+12,12,32,12,0x18254b);box(z%70?23:-23,8,z+4,.35,12,.35,0x38e8ff,2.2);}}
+if(l.theme==='city'){l.platforms.forEach(([a,b,h],n)=>box(n%2?-24:24,h+11,(a+b)/2+18,14,26,18,0x7896a8));}
+const anchors=l.hooks.map(([y,z])=>{const a=new THREE.Mesh(new THREE.SphereGeometry(1,20,16),m(l.theme==='neon'?0x42f5e9:0xffdf45,2.5));a.position.set(0,y,z);g.add(a);return a});const finish=new THREE.Mesh(new THREE.TorusGeometry(4,.45,12,36),m(l.theme==='neon'?0xff4fd8:0xffdf45,1.4));finish.rotation.y=Math.PI/2;finish.position.set(0,(l.platforms.at(-1)?.[2]||0)+6,l.end-6);g.add(finish);return{group:g,anchors,labels:l.labels,level:l};}
+export function nextAnchor(a,z){return a.find(x=>{const d=x.position.z-z;return d>2&&d<38})||null;}
