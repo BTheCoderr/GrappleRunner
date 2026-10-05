@@ -1,0 +1,12 @@
+{
+  "appId": "com.bthedream.grapplerunner",
+  "appName": "GrappleRunner",
+  "webDir": ".",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "never",
+    "preferredContentMode": "mobile"
+  }
+}
