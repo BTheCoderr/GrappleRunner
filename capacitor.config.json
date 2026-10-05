@@ -1,7 +1,7 @@
 {
   "appId": "com.bthedream.grapplerunner",
   "appName": "GrappleRunner",
-  "webDir": ".",
+  "webDir": "www",
   "server": {
     "androidScheme": "https"
   },
